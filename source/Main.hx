@@ -15,15 +15,21 @@ import openfl.events.Event;
 import openfl.display.StageScaleMode;
 import lime.app.Application;
 import states.TitleState;
-#if mobile
-import mobile.states.CopyState;
-#end
 
 #if linux
 import lime.graphics.Image;
 #end
 
 import sys.FileSystem;
+
+//crash handler stuff
+#if CRASH_HANDLER
+import openfl.events.UncaughtErrorEvent;
+import haxe.CallStack;
+import haxe.io.Path;
+import sys.io.File;
+import sys.io.Process;
+#end
 
 class Main extends Sprite
 {
@@ -39,10 +45,6 @@ class Main extends Sprite
 
 	public static var fpsVar:FPS;
 
-	public static final PSYCH_ONLINE_VERSION:String = "0.6.4";
-	public static final CLIENT_PROTOCOL:Float = 1;
-	public static final GIT_COMMIT:String = online.Macros.getGitCommitHash();
-
 	// You can pretty much ignore everything from here on - your code should go in your states.
 
 	public static function main():Void
@@ -53,10 +55,6 @@ class Main extends Sprite
 	public function new()
 	{
 		super();
-		#if mobile
-		Sys.setCwd(#if ios lime.system.System.documentsDirectory #elseif android haxe.io.Path.addTrailingSlash(android.content.Context.getExternalFilesDir()) #end);
-		#end
-		backend.CrashHandler.init();
 
 		if (stage != null)
 		{
@@ -80,7 +78,6 @@ class Main extends Sprite
 
 	private function setupGame():Void
 	{
-		#if (openfl <= "9.2.0")
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
@@ -92,7 +89,6 @@ class Main extends Sprite
 			game.width = Math.ceil(stageWidth / game.zoom);
 			game.height = Math.ceil(stageHeight / game.zoom);
 		}
-		#end
 
 		CoolUtil.setDarkMode(true);
 
@@ -103,8 +99,9 @@ class Main extends Sprite
 		#if LUA_ALLOWED Lua.set_callbacks_function(cpp.Callable.fromStaticFunction(psychlua.CallbackHandler.call)); #end
 		Controls.instance = new Controls();
 		ClientPrefs.loadDefaultKeys();
-		addChild(new FlxGame(game.width, game.height, #if (mobile && MODS_ALLOWED) !CopyState.checkExistingFiles() ? CopyState : #end game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen));
+		addChild(new FlxGame(game.width, game.height, game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen));
 
+		#if !mobile
 		fpsVar = new FPS(10, 3, 0xFFFFFF);
 		addChild(fpsVar);
 		Lib.current.stage.align = "tl";
@@ -112,17 +109,20 @@ class Main extends Sprite
 		if(fpsVar != null) {
 			fpsVar.visible = ClientPrefs.data.showFPS;
 		}
+		#end
 
 		#if linux
 		var icon = Image.fromFile("icon.png");
 		Lib.current.stage.window.setIcon(icon);
 		#end
 
-		#if android FlxG.android.preventDefaultKeys = [BACK]; #end
-
 		#if html5
 		FlxG.autoPause = false;
 		FlxG.mouse.visible = false;
+		#end
+		
+		#if CRASH_HANDLER
+		Lib.current.loaderInfo.uncaughtErrorEvents.addEventListener(UncaughtErrorEvent.UNCAUGHT_ERROR, onCrash);
 		#end
 
 		#if DISCORD_ALLOWED
@@ -131,8 +131,6 @@ class Main extends Sprite
 
 		// shader coords fix
 		FlxG.signals.gameResized.add(function (w, h) {
-			if(fpsVar != null)
-				fpsVar.positionFPS(10, 3, Math.min(w / FlxG.width, h / FlxG.height));
 		     if (FlxG.cameras != null) {
 			   for (cam in FlxG.cameras.list) {
 				@:privateAccess
@@ -187,7 +185,6 @@ class Main extends Sprite
 			});
 		});
 		
-		#if HSCRIPT_ALLOWED
 		FlxG.signals.postStateSwitch.add(() -> {
 			online.SyncScript.dispatch("switchState", [FlxG.state]);
 
@@ -199,7 +196,6 @@ class Main extends Sprite
 		online.SyncScript.resyncScript(false, () -> {
 			online.SyncScript.dispatch("init");
 		});
-		#end
 	}
 
 	static function resetSpriteCache(sprite:Sprite):Void {
@@ -208,4 +204,44 @@ class Main extends Sprite
 			sprite.__cacheBitmapData = null;
 		}
 	}
+
+	#if CRASH_HANDLER
+	function onCrash(e:UncaughtErrorEvent):Void
+	{
+		var alertMsg:String = "";
+		var daError:String = "";
+		var path:String;
+		var callStack:Array<StackItem> = CallStack.exceptionStack(true);
+		var dateNow:String = Date.now().toString();
+
+		dateNow = dateNow.replace(" ", "_");
+		dateNow = dateNow.replace(":", "'");
+
+		path = "./crash/" + "PsychEngine_" + dateNow + ".txt";
+
+		alertMsg += e.error + "\n";
+		daError += CallStack.toString(callStack) + "\n";
+		if (e.error is Exception)
+			daError += cast(e.error, Exception).stack.toString() + "\n";
+		alertMsg += daError;
+
+		Sys.println(alertMsg);
+
+		if (!FileSystem.exists("./crash/"))
+			FileSystem.createDirectory("./crash/");
+		File.saveContent(path, alertMsg + "\n");
+		Sys.println("Crash dump saved in " + Path.normalize(path));
+		
+		#if (windows && cpp)
+		alertMsg += "\nDo you wish to report this error on GitHub?";
+		WinAPI.alert("Uncaught Exception!", alertMsg, () -> {
+			daError += '\nVersion: ${MainMenuState.psychOnlineVersion} (${online.Macros.getGitCommitHash()})';
+			FlxG.openURL('https://github.com/Snirozu/Funkin-Psych-Online/issues/new?title=${StringTools.urlEncode('Exception: ${e.error}')}&body=${StringTools.urlEncode(daError)}');
+		});
+		#else
+		Application.current.window.alert(alertMsg, "Uncaught Exception!");
+		#end
+		Sys.exit(1);
+	}
+	#end
 }

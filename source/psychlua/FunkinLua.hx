@@ -1606,7 +1606,7 @@ class FunkinLua {
 			if(resultStr != null && result != 0) {
 				if (ClientPrefs.isDebug()) {
 					Sys.println("Lua: " + resultStr);
-					#if (desktop || mobile)
+					#if desktop
 					lime.app.Application.current.window.alert(resultStr, 'Error on lua script!');
 					#else
 					luaTrace('$scriptName\n$resultStr', true, false, FlxColor.RED);

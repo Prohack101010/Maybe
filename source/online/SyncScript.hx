@@ -1,6 +1,5 @@
 package online;
 
-#if HSCRIPT_ALLOWED
 import tea.SScript;
 import sys.io.File;
 import sys.FileSystem;
@@ -65,4 +64,3 @@ class SyncScript extends SScript {
 		set("typeof", s -> Type.getClassName(Type.getClass(s)));
 	}
 }
-#end

@@ -134,8 +134,4 @@ class CoolUtil
 		@:privateAccess var attributes = lime.app.Application.current.window.__attributes;
 		return Reflect.hasField(attributes, "title") ? attributes.title : "Lime Application";
 	}
-
-	public static inline function last<T>(array:Array<T>):T {
-		return array[array.length - 1];
-	}
 }

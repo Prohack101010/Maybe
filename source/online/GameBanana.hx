@@ -27,24 +27,16 @@ typedef GBMod = {
 	var withheld:Bool;
 	var rootCategory:String;
 	var downloadCount:Float;
-	var likes:Float;
-	var screenshots:Array<GBImage>;
 }
 
 typedef GBSub = {
 	var _idRow:Float;
-	var _sModelName:String;
 	var _sName:String;
 	var _sProfileUrl:String;
 	var _aPreviewMedia:GBPrevMedia;
 	var _aRootCategory:GBCategory;
 	var _sVersion:String;
-	var _aGame:GBGame;
 	var _nLikeCount:Null<Float>; // "null cant be used as int!!!" then why does this return null instead of 0
-}
-
-typedef GBGame = {
-	var _idRow:Float;
 }
 
 typedef GBPrevMedia = {
@@ -110,34 +102,11 @@ class GameBanana {
 		});
 	}
 
-	public static function listCollection(id:String, page:Int, response:(mods:Array<GBSub>, err:Dynamic) -> Void) {
+	public static function getMod(id:String, response:(mod:GBMod, err:Dynamic)->Void) {
 		Thread.run(() -> {
 			var http = new Http(
-			'https://gamebanana.com/apiv11/Collection/${id}/Items?_nPage=${page}&_nPerpage=15'
-			);
-
-			http.onData = function(data:String) {
-				Waiter.put(() -> {
-					var json:Dynamic = Json.parse(data);
-					response(cast(json._aRecords), json._sErrorCode != null ? json._sErrorMessage : null);
-				});
-			}
-
-			http.onError = function(error) {
-				Waiter.put(() -> {
-					response(null, error);
-				});
-			}
-
-			http.request();
-		});
-	}
-
-	public static function getMod(id:String, response:(mod:GBMod, err:Dynamic)->Void, ?threaded:Bool = true) {
-		var func = () -> {
-			var http = new Http(
 			"https://api.gamebanana.com/Core/Item/Data?itemtype=Mod&itemid=" + id + 
-			"&fields=name,description,Files().aFiles(),Url().sDownloadUrl(),Game().name,Trash().bIsTrashed(),Withhold().bIsWithheld(),RootCategory().name,downloads,likes,screenshots"
+			"&fields=name,description,Files().aFiles(),Url().sDownloadUrl(),Game().name,Trash().bIsTrashed(),Withhold().bIsWithheld(),RootCategory().name,downloads"
 			);
 
 			http.onData = function(data:String) {
@@ -153,9 +122,7 @@ class GameBanana {
 					trashed: arr[5],
 					withheld: arr[6],
 					rootCategory: arr[7],
-					downloadCount: arr[8],
-					likes: arr[9],
-					screenshots: Json.parse(arr[10])
+					downloadCount: arr[8]
 				}, null);
 			}
 
@@ -164,11 +131,7 @@ class GameBanana {
 			}
 
 			http.request();
-		};
-		if (threaded)
-			Thread.run(func);
-		else
-			func();
+		});
     }
 
 	public static function getModDownloads(modID:Float, response:(downloads:DownloadPage, err:Dynamic) -> Void) {
@@ -211,7 +174,7 @@ class GameBanana {
         }
 
 		if (daModUrl == null) {
-			Alert.alert("Failed to download!", "Unsupported file archive type!\n(Only ZIP, TAR, TGZ, RAR archives are supported!)");
+			Alert.alert("Failed to download!", "Unsupported file archive type!\n(Only ZIP, TAR, TGZ archives are supported!)");
 			RequestState.requestURL(mod.pageDownload, "The following mod needs to be installed from this source", true);
 			return;
 		}

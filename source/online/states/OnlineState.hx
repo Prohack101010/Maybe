@@ -178,11 +178,7 @@ class OnlineState extends MusicBeatState {
 
 		var mouseInItems = FlxG.mouse.y > items.y && FlxG.mouse.y < items.y + items.members.length * 40;
 
-		if (FlxG.mouse.justPressed && inputWait) {
-			if (!FlxG.mouse.overlaps(items.members[curSelected])) {
-				inputWait = false;
-				return;
-			}
+		if (FlxG.mouse.justPressed && inputWait && mouseInItems) {
 			enterInput();
 			return;
 		}

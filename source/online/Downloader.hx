@@ -1,7 +1,5 @@
 package online;
 
-import haxe.io.Eof;
-import haxe.io.Error;
 import haxe.CallStack;
 import haxe.io.Path;
 import online.states.RequestState;
@@ -78,7 +76,6 @@ class Downloader {
 			}
 			catch (exc) {
 				if (!cancelRequested) {
-					trace(id + ': ' + exc + "\n\n" + CallStack.toString(exc.stack));
 					Waiter.put(() -> {
 						Alert.alert('Uncaught Download Error!', id + ': ' + exc + "\n\n" + CallStack.toString(exc.stack));
 					});
@@ -96,9 +93,7 @@ class Downloader {
 		"application/x-tar",
 		"application/gzip",
 		"application/x-gtar",
-		"application/octet-stream", // unknown files
-		"application/vnd.rar",
-		"application/x-rar-compressed",
+		"application/octet-stream" // unknown files
 	];
 
 	public static function isMediaTypeAllowed(file:String) {
@@ -126,7 +121,6 @@ class Downloader {
 
 		socket = !urlFormat.isSSL ? new Socket() : new sys.ssl.Socket();
 		socket.setTimeout(5);
-		socket.setBlocking(true);
 
 		var tries = 0;
 		while (!cancelRequested) {
@@ -135,36 +129,28 @@ class Downloader {
 			try {
 				socket.connect(new Host(urlFormat.domain), urlFormat.port);
 
-				if (ClientPrefs.isDebug())
-					Sys.println("DHX: Connected to HTTP 1.1 socket!");
-
 				socket.write('GET ${urlFormat.path} HTTP/1.1${headers}\n\n');
 
 				var httpStatus:String = null;
-				socket.waitForRead();
 				httpStatus = socket.input.readLine();
 				httpStatus = httpStatus.substr(httpStatus.indexOf(" ")).ltrim();
 
 				if (httpStatus == null || httpStatus.startsWith("4") || httpStatus.startsWith("5")) {
 					Waiter.put(() -> {
-						Alert.alert('Server Error - $httpStatus', 'Retrying ($tries)...');
+						Alert.alert('Server doesn\'t have this mod!', httpStatus);
 					});
+					cancelRequested = true;
 				}
-				if (ClientPrefs.isDebug())
-					Sys.println("DHX: Got response headers!");
 				break;
 			}
 			catch (exc) {
 				if (tries >= 5) {
-					trace(id + ': ' + exc + "\n\n" + CallStack.toString(exc.stack));
 					Waiter.put(() -> {
 						Alert.alert('Couldn\'t connect to the server after multiple tries!', '${urlFormat.domain + urlFormat.path}' + ': ' + exc + "\n\n" + CallStack.toString(exc.stack));
 					});
 					cancelRequested = true;
 					break;
 				}
-				if (ClientPrefs.isDebug())
-					Sys.println("DHX: Retrying...");
 				Sys.sleep(1);
 			}
 		}
@@ -175,18 +161,15 @@ class Downloader {
 		}
 
 		var gotHeaders:Map<String, String> = new Map<String, String>();
-		while (!cancelRequested) {
-			socket.waitForRead();
+		while (gotContent < contentLength && !cancelRequested) {
 			var readLine:String = socket.input.readLine();
+			gotContent += readLine.length;
 			if (readLine.trim() == "") {
 				break;
 			}
 			var splitHeader = readLine.split(": ");
 			gotHeaders.set(splitHeader[0].toLowerCase(), splitHeader[1]);
 		}
-
-		if (ClientPrefs.isDebug())
-			Sys.println("DHX: Parsed response headers!");
 
 		if (cancelRequested) {
 			doCancel();
@@ -223,9 +206,6 @@ class Downloader {
 			return;
 		}
 
-		if (ClientPrefs.isDebug())
-			Sys.println("DHX: Transfer-Encoding type: " + gotHeaders.get("transfer-encoding"));
-
 		try {
 			file = File.append(downloadPath, true);
 		}
@@ -239,27 +219,14 @@ class Downloader {
 			doCancel();
 			return;
 		}
-
-		if (ClientPrefs.isDebug())
-			Sys.println("DHX: Starting the download!");
 		
 		var buffer:Bytes = Bytes.alloc(1024);
 		var _bytesWritten:Int = 0;
 		isDownloading = true;
 		while (gotContent < contentLength && !cancelRequested) {
-			try {
-				socket.waitForRead();
-				_bytesWritten = socket.input.readBytes(buffer, 0, buffer.length);
-				file.writeBytes(buffer, 0, _bytesWritten);
-				gotContent += _bytesWritten;
-			}
-			catch (e:Dynamic) {
-				if (e is Eof || e == Error.Blocked) {
-					// Eof and Blocked will be ignored
-					continue;
-				}
-				throw e;
-			}
+			_bytesWritten = socket.input.readBytes(buffer, 0, buffer.length);
+			file.writeBytes(buffer, 0, _bytesWritten);
+			gotContent += _bytesWritten;
 		}
 		isDownloading = false;
 		isConnected = false;
@@ -323,8 +290,7 @@ class Downloader {
 			alert.destroy();
 		alert = null;
 		try {
-			if (!FlxG.keys.pressed.F2)
-				deleteTempFile();
+			deleteTempFile();
 		}
 		catch (exc) {
 		}

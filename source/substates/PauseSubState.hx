@@ -139,8 +139,7 @@ class PauseSubState extends MusicBeatSubstate
 		add(missingText);
 
 		regenMenu();
-		//cameras = [FlxG.cameras.list[FlxG.cameras.list.length - 1]];
-		cameras = [PlayState.instance.camOther];
+		cameras = [FlxG.cameras.list[FlxG.cameras.list.length - 1]];
 	}
 
 	var holdTime:Float = 0;

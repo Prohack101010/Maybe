@@ -1,18 +1,17 @@
 package online;
 
-import haxe.CallStack;
-#if RAR_SUPPORTED
-import unrar.UnRAR;
-#end
 import backend.WeekData;
 import haxe.io.Path;
 import online.states.RequestState;
+import openfl.net.URLRequestHeader;
+import haxe.Http;
 import online.GameBanana.GBMod;
 import openfl.display.PNGEncoderOptions;
 import haxe.Json;
 import openfl.geom.Rectangle;
 import openfl.utils.ByteArray;
 import openfl.display.BitmapData;
+import lime.system.System;
 import haxe.zip.Reader;
 import haxe.zip.Entry;
 import online.states.SetupMods;
@@ -99,10 +98,6 @@ class OnlineMods {
 		,'dad-battle', 'philly-nice', 'test', 'smash', 'ridge'
 	];
 
-	static final vanillaWeeks:Array<String> = [
-		'tutorial', 'week1', 'week2', 'week3', 'week4', 'week5', 'week6', 'week7'
-	];
-
 	public static function startDownloadMod(fileName:String, modURL:String, ?gbMod:GBMod, ?onSuccess:String->Void, ?headers:Map<String, String>, ?ogURL:String) {
 		new Downloader(fileName, ogURL ?? modURL, modURL, (fileName, downloader) -> {
 			installMod(fileName, downloader, downloader.originURL, gbMod, onSuccess);
@@ -114,112 +109,96 @@ class OnlineMods {
 		fileName = Path.normalize(fileName); // I HATE WINDOWS PATH FORMAT AAAAAAAAAAAAAA (C:/ is cool though, JUST INVERT THESE SLASHES PLEASE)
 		var _fileNameSplit = fileName.split("/");
 		var swagFileName = _fileNameSplit[_fileNameSplit.length - 1].split(".")[0];
+		var file = File.read(fileName, true);
+		var zipFiles:List<Entry>;
+		try {
+			zipFiles = Reader.readZip(file);
+		} 
+		catch (exc) {
+			trace(exc);
+			file.close();
+			Waiter.put(() -> {
+				Alert.alert("Mod's data is corrupted or invalid!");
+			});
+			return;
+		}
+		file.close();
 		var beginFolder = null; // the folder inside the archive to extract
 		var parentFolder = Paths.mods(); // the destination mod path
-		var modName:String = null;
 		var ignoreRest = false;
+		var fileSize = 0.;
+		var dataSize = 0.;
 		var isExecutable = false;
-		var isRar = #if RAR_SUPPORTED unrar.RARUtil.isRAR(fileName) #else false #end;
-		var zipFiles:List<Entry> = null;
+		for (entry in zipFiles) {
+			fileSize += entry.fileSize;
+			dataSize += entry.dataSize;
 
-		function iterFunc(fileName:String) {
-			if (fileName.endsWith(".exe"))
+			if (entry.fileName.endsWith(".exe"))
 				isExecutable = true;
 
 			if (!ignoreRest) {
-				var pathSplit = fileName.split("/");
+				var pathSplit = entry.fileName.split("/");
 
-				var forFiles = [];
-				for (file in pathSplit) {
-					if (file == "shared" || file == "mods")
-						return;
+				var suppModPath = pathSplit[pathSplit.length - 3] ?? "";
+				var suppModFolder = pathSplit[pathSplit.length - 2] ?? "";
 
-					if (file == "assets" || Mods.ignoreModFolders.contains(file)) {
-						modName = forFiles[forFiles.length - 1] ?? null;
-						if (modName == null || modName.trim() == "" || modName == "bin" || modName == "PsychEngine")
-							modName = gbMod != null ? gbMod._id : swagFileName;
-						modName = FileUtils.formatFile(modName);
+				var removeCount = 
+					suppModFolder.length == 0 ? 0 : 1 + 
+					entry.fileName.length == 0 ? 0 : 1
+				;
 
-						parentFolder += modName + "/";
-						beginFolder = forFiles.join("/") + "/";
-						ignoreRest = true;
-						if (ClientPrefs.isDebug())
-							trace(beginFolder + ' -> ' + parentFolder);
-						return;
+				if (Mods.ignoreModFolders.contains(suppModFolder)) {
+					beginFolder = 
+						entry.fileName // something/mod_name/characters/ or something/mod_name/assets/characters/ (because assets always go first)
+						.substring(0, entry.fileName.length - (
+							suppModPath == "assets" ?
+								suppModFolder.length + suppModPath.length + removeCount + (suppModPath.length == 0 ? 0 : 1)
+								:
+								suppModFolder.length + removeCount
+							)
+						)
+					;
+
+					if (beginFolder == "assets/" || beginFolder == "mods/") {
+						beginFolder = "";
 					}
-					forFiles.push(file);
+
+					var splat = beginFolder.split("/");
+					if (splat[splat.length - 1] == "bin" || splat[splat.length - 1] == "mods" || splat[splat.length - 1].trim() == "")
+						parentFolder += (gbMod != null ? gbMod._id : swagFileName);
+					else
+						if (splat[splat.length - 1] == "assets")
+							parentFolder += splat[splat.length - 2] ?? (gbMod != null ? gbMod._id : swagFileName);
+						else
+							parentFolder += splat[splat.length - 1] ?? (gbMod != null ? gbMod._id : swagFileName);
+					parentFolder += "/"; //dont ask
+					ignoreRest = true;
 				}
 			}
 		}
-
-		if (isRar) {
-			var rarFailed = false;
-			#if RAR_SUPPORTED
-			UnRAR.openArchive({
-				openPath: fileName,
-				mode: LIST,
-				onError: (code, type) -> {
-					Waiter.put(() -> {
-						Alert.alert("Listing RAR failed!", '$code\n$type');
-					});
-					rarFailed = true;
-				},
-				onFile: (file, flags) -> {
-					iterFunc(file);
-					return file;
-				}
-			});
-			#else
+		if (Math.min(fileSize, dataSize) < 0 || Math.max(fileSize, dataSize) >= 3000000000) {
 			Waiter.put(() -> {
-				Alert.alert("RAR is not supported on this platform!");
+				Alert.alert("Downloading Cancelled",
+					'Mod\'s archive file is WAY too big!\n${FlxMath.roundDecimal(Math.max(fileSize, dataSize) / 1000000000, 4)}GB');
 			});
-			#end
-			if (rarFailed) {
-				return;
-			}
+			return;
 		}
-		else {
-			var file = File.read(fileName, true);
-			try {
-				zipFiles = Reader.readZip(file);
-			}
-			catch (exc) {
-				trace(exc, CallStack.toString(exc.stack));
-				file.close();
-				Waiter.put(() -> {
-					Alert.alert("Mod's data is corrupted or invalid!", exc + "\n" + CallStack.toString(exc.stack) + "\n\n" + fileName);
-				});
-				return;
-			}
-			file.close();
-
-			var fileSize = 0.;
-			var dataSize = 0.;
-			for (entry in zipFiles) {
-				fileSize += entry.fileSize;
-				dataSize += entry.dataSize;
-
-				iterFunc(entry.fileName);
-			}
-			if (Math.min(fileSize, dataSize) < 0 || Math.max(fileSize, dataSize) >= 3000000000) {
-				Waiter.put(() -> {
-					Alert.alert("Downloading Cancelled",
-						'Mod\'s archive file is WAY too big!\n${FlxMath.roundDecimal(Math.max(fileSize, dataSize) / 1000000000, 4)}GB');
-				});
-				return;
-			}
-		}
-		
 		if (beginFolder == null) {
+			if (downloader != null)
+				System.openFile(downloader.tryRenameFile());
 			Waiter.put(() -> {
 				Alert.alert("Mod data not found inside of the archive!");
 			});
 			return;
 		}
 
+		//Sys.println('found data in archive: "${beginFolder}", to: "${parentFolder}"');
+
+		var modName = FileUtils.formatFile(parentFolder.substring(Paths.mods().length, parentFolder.length - 1));
+
 		if (FileSystem.exists(Paths.mods(modName))) {
 			try {
-				FileUtils.removeFiles(parentFolder);
+				FileUtils.removeFiles(Paths.mods(modName));
 			}
 			catch (exc) {
 				Waiter.put(() -> {
@@ -229,55 +208,8 @@ class OnlineMods {
 			}
 		}
 
-		if (isRar) {
-			var rarFailed = false; 
-			#if RAR_SUPPORTED
-			UnRAR.openArchive({
-				openPath: fileName,
-				mode: EXTRACT,
-				onError: (code, type) -> {
-					trace("RAR FAILED: " + code + " - " + type);
-					Waiter.put(() -> {
-						Alert.alert("Extracting RAR failed!", '$code\n$type');
-					});
-					rarFailed = true;
-				},
-				onFile: (file, flags) -> {
-					if (!StringTools.startsWith(file, beginFolder) || flags.isDirectory) {
-						return null;
-					}
-
-					var coolPath = Path.join([parentFolder, file.substring(beginFolder.length)]).split("/");
-					for (i => file in coolPath) {
-						// seems like unrar (c++ side) doesn't want to create files with invalid characters?
-						coolPath[i] = FileUtils.formatFile(file, i == coolPath.length - 1);
-					}
-					return coolPath.join("/");
-				}
-			});
-			#else
-			Waiter.put(() -> {
-				Alert.alert("RAR is not supported on this platform!");
-			});
-			#end
-			if (rarFailed) {
-				try {
-					FileUtils.removeFiles(parentFolder);
-				} catch (exc) {}
-				return;
-			}
-		}
-		else {
-			for (entry in zipFiles) {
-				if (!StringTools.startsWith(entry.fileName, beginFolder) || entry.fileName.endsWith("/")) {
-					continue;
-				}
-
-				if (!FileSystem.exists(Path.directory(Path.join([parentFolder, entry.fileName.substring(beginFolder.length)])))) {
-					FileSystem.createDirectory(Path.join([parentFolder, Path.directory(entry.fileName).substring(beginFolder.length)]));
-				}
-				File.saveBytes(Path.join([parentFolder, entry.fileName.substring(beginFolder.length)]), Reader.unzip(entry));
-			}
+		for (entry in zipFiles) {
+			_unzip(entry, beginFolder, parentFolder);
 		}
 
 		if ((gbMod != null ? gbMod.rootCategory == "Skins" : false) && !FileSystem.exists(Paths.mods(modName + '/pack.json'))) {
@@ -344,19 +276,6 @@ class OnlineMods {
 				FileSystem.deleteFile(Paths.mods(modName + "/images/alphabet.xml"));
 			}
 
-			//...and also health bar and time bar
-			if (FileSystem.exists(Paths.mods(modName + "/images/healthBar.png"))) {
-				FileSystem.deleteFile(Paths.mods(modName + "/images/healthBar.png"));
-			}
-			if (FileSystem.exists(Paths.mods(modName + "/images/timeBar.png"))) {
-				FileSystem.deleteFile(Paths.mods(modName + "/images/timeBar.png"));
-			}
-
-			//get yo ass outta here
-			if (FileSystem.exists(Paths.mods(modName + "/weeks/weekList.txt"))) {
-				FileSystem.deleteFile(Paths.mods(modName + "/weeks/weekList.txt"));
-			}
-
 			var songsToAdd = [];
 			var diffsToAdd = [];
 			// for (file in FileSystem.readDirectory(Paths.mods(modName + "/songs"))) {
@@ -399,15 +318,6 @@ class OnlineMods {
 			FileUtils.forEachFile(Paths.mods(modName + "/weeks/"), (path) -> {
 				try {
 					if (path.endsWith(".json")) {
-						var pathSplit = path.split("/");
-						var week = pathSplit.pop();
-						week = week.substring(0, week.length - ".json".length);
-
-						if (vanillaWeeks.contains(week)) {
-							pathSplit.push(week + "_" + modName + ".json");
-							FileSystem.rename(path, path = Path.join(pathSplit));
-						}
-
 						var json = Json.parse(File.getContent(path));
 						var songs:Array<Array<Dynamic>> = json.songs;
 						for (song in songs) {
@@ -456,6 +366,17 @@ class OnlineMods {
 				FlxG.sound.playMusic(Paths.music('freakyMenu'));
 			}
 		});
+	}
+
+	private static function _unzip(entry:Entry, begins:String, newParent:String) {
+		if (!StringTools.startsWith(entry.fileName, begins) || entry.fileName.endsWith("/")) {
+			return;
+		}
+
+		if (!FileSystem.exists(Path.directory(Path.join([newParent, entry.fileName.substring(begins.length)])))) {
+			FileSystem.createDirectory(Path.join([newParent, Path.directory(entry.fileName).substring(begins.length)]));
+		}
+		File.saveBytes(Path.join([newParent, entry.fileName.substring(begins.length)]), Reader.unzip(entry));
 	}
 
 	public static function formatSongName(song:String) {
